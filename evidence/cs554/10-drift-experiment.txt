@@ -1,0 +1,126 @@
+# CS 554: configuration drift experiment on dev
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+# No drift before starting (exit code 0 = no changes, 2 = changes):
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -detailed-exitcode > /dev/null; echo "detailed-exitcode=$?"
+detailed-exitcode=0
+
+# EXPERIMENT 1: change the restart policy by hand.
+
+# Expected (written before the change): plan shows an in-place update of restart back to "unless-stopped",
+# 0 to add, 1 to change, 0 to destroy. Nothing else changes.
+
+$ docker inspect -f 'BEFORE {{.Name}} id={{printf "%.12s" .Id}} restart={{.HostConfig.RestartPolicy.Name}}' cs554-p3-dev-api
+BEFORE /cs554-p3-dev-api id=a43d747c9dc7 restart=unless-stopped
+
+$ docker update --restart=no cs554-p3-dev-api
+cs554-p3-dev-api
+
+$ docker inspect -f 'DRIFTED {{.Name}} id={{printf "%.12s" .Id}} restart={{.HostConfig.RestartPolicy.Name}}' cs554-p3-dev-api
+DRIFTED /cs554-p3-dev-api id=a43d747c9dc7 restart=no
+
+# Observed, refresh-only plan:
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -refresh-only | sed -n '/Note: Objects have changed/,/Plan:/p;/This is a refresh-only plan/,/^$/p' | grep -E 'Note:|has changed|~ resource|~ restart|unchanged attributes|refresh-only|No changes'
+Note: Objects have changed outside of Terraform
+  # docker_network.backend has changed
+[...]
+  # docker_network.frontend has changed
+[...]
+  # module.api.docker_container.service has changed
+[...]
+      ~ restart                                     = "unless-stopped" -> "no"
+[...]
+  # module.redis.docker_container.redis has changed
+[...]
+  # module.redis.docker_volume.redis_data has changed
+[...]
+Note: You didn't use the -out option to save this plan, so Terraform can't
+
+# Observed, normal plan:
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -detailed-exitcode -out=drift.tfplan > drift.txt; echo "detailed-exitcode=$?"; grep -E '^  # |update in-place|~ restart|^Plan:' drift.txt
+detailed-exitcode=2
+  ~ update in-place
+  # module.api.docker_container.service will be updated in-place
+      ~ restart                                     = "no" -> "unless-stopped"
+Plan: 0 to add, 1 to change, 0 to destroy.
+
+# The normal plan matched the expectation. The refresh-only plan also listed objects that had not changed (see the end of this file).
+
+# Recovery: apply the plan. Same container ID, restart policy restored, no drift left.
+
+$ terraform apply -no-color drift.tfplan | grep -E "Modif|Apply complete"; rm drift.tfplan drift.txt
+module.api.docker_container.service: Modifying... [id=a43d747c9dc7d8913b82a38c595556ac114cf9262df938dd55552a367bb46ae2]
+module.api.docker_container.service: Modifications complete after 0s [id=a43d747c9dc7d8913b82a38c595556ac114cf9262df938dd55552a367bb46ae2]
+Apply complete! Resources: 0 added, 1 changed, 0 destroyed.
+
+$ docker inspect -f 'RECOVERED {{.Name}} id={{printf "%.12s" .Id}} restart={{.HostConfig.RestartPolicy.Name}}' cs554-p3-dev-api
+RECOVERED /cs554-p3-dev-api id=a43d747c9dc7 restart=unless-stopped
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -detailed-exitcode > /dev/null; echo "detailed-exitcode=$? (no drift remains)"
+detailed-exitcode=0 (no drift remains)
+
+# EXPERIMENT 2: delete the API container by hand.
+
+# Expected (written before the change): plan shows the container as deleted and creates it again,
+# 1 to add, 0 to change, 0 to destroy. Redis is untouched, so the count continues.
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 1
+Smoke test: 1 request(s) to http://127.0.0.1:8091/
+  request 1: HTTP 200 service=cs554-p3-dev-api hostname=a43d747c9dc7 localCount=4 redisCount=4 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ docker rm -f cs554-p3-dev-api
+cs554-p3-dev-api
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -detailed-exitcode -out=drift2.tfplan > drift2.txt; echo "detailed-exitcode=$?"; grep -E 'Note:|has been deleted|^  # |^Plan:' drift2.txt
+detailed-exitcode=2
+Note: Objects have changed outside of Terraform
+  # module.api.docker_container.service has been deleted
+  # module.api.docker_container.service will be created
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+# Observed matched the expectation. Recovery: apply the plan.
+
+$ terraform apply -no-color drift2.tfplan | grep -E "Creat|Apply complete"; rm drift2.tfplan drift2.txt
+module.api.docker_container.service: Creating...
+module.api.docker_container.service: Creation complete after 0s [id=bfaf2c29a704d02d7269e42f7dc8e871d7d7072302d3469593d089bf8edee2fb]
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 1
+Smoke test: 1 request(s) to http://127.0.0.1:8091/
+  request 1: HTTP 200 service=cs554-p3-dev-api hostname=bfaf2c29a704 localCount=1 redisCount=5 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -detailed-exitcode > /dev/null; echo "detailed-exitcode=$? (converged)"
+detailed-exitcode=0 (converged)
+
+# Why the refresh-only plan listed extra objects: values stored as null at creation are read back as [] / {} / 0.
+# These are not real changes; the normal plan ignores them. Checked with scripts/drift-attributes.py:
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -refresh-only -out=ro.tfplan > /dev/null && terraform show -json ro.tfplan | python3 scripts/drift-attributes.py; rm ro.tfplan
+module.api.docker_container.service  (update outside Terraform)
+    .device_cgroup_rules: null -> []
+    .dns: null -> []
+    .dns_opts: null -> []
+    .dns_search: null -> []
+    .group_add: null -> []
+    .log_opts: null -> {}
+    .networks_advanced[0].gw_priority: null -> 0
+    .networks_advanced[1].gw_priority: null -> 0
+    .storage_opts: null -> {}
+    .sysctls: null -> {}
+    .tmpfs: null -> {}
+
+Only empty-value normalization (null vs []/{}/0): no meaningful drift.
+
+# Accept these harmless differences into state without changing anything:
+
+$ terraform apply -no-color -var-file=environments/dev.tfvars -refresh-only -auto-approve | grep -E 'Apply complete|No changes'
+Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -refresh-only -out=ro.tfplan > /dev/null && terraform show -json ro.tfplan | python3 scripts/drift-attributes.py; rm ro.tfplan
+No drift: state matches the real objects.

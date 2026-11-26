@@ -1,0 +1,44 @@
+# Part C: replace only the API container; the Redis count continues
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+# Before:
+
+$ docker inspect -f '{{printf "%-24s" .Name}} id={{printf "%.12s" .Id}} started={{.State.StartedAt}}' cs554-p3-local-api cs554-p3-local-redis; docker volume inspect -f '/{{printf "%-23s" .Name}} volume created={{.CreatedAt}}' cs554-p3-local-redis-data
+/cs554-p3-local-api      id=a9b428930d7a started=2026-11-26T00:51:56.526616929Z
+/cs554-p3-local-redis    id=197347c8867c started=2026-11-26T00:50:44.471303924Z
+/cs554-p3-local-redis-data volume created=2026-11-26T00:50:42Z
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 2
+Smoke test: 2 request(s) to http://127.0.0.1:8082/
+  request 1: HTTP 200 service=cs554-p3-local-api hostname=a9b428930d7a localCount=3 redisCount=11 redisError=null
+  request 2: HTTP 200 service=cs554-p3-local-api hostname=a9b428930d7a localCount=4 redisCount=12 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ terraform plan -no-color -replace=module.api.docker_container.service -out=replace-api.tfplan > replace-api.txt; grep -E "^  # |^Plan:" replace-api.txt
+  # module.api.docker_container.service will be replaced, as requested
+Plan: 1 to add, 0 to change, 1 to destroy.
+
+$ terraform apply -no-color replace-api.tfplan | grep -vE "^\s*$"
+module.api.docker_container.service: Destroying... [id=a9b428930d7aed313bb3c071fe6cb39743a2eded908d69e94d6505b834372ba1]
+module.api.docker_container.service: Destruction complete after 5s
+module.api.docker_container.service: Creating...
+module.api.docker_container.service: Creation complete after 1s [id=f2d8c3bb45da0bc43129b150fff3b076c9b021ed729fd37a78069db0725881c0]
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+[...]
+
+# After: new API container ID, same Redis container ID and volume, count continues:
+
+$ docker inspect -f '{{printf "%-24s" .Name}} id={{printf "%.12s" .Id}} started={{.State.StartedAt}}' cs554-p3-local-api cs554-p3-local-redis; docker volume inspect -f '/{{printf "%-23s" .Name}} volume created={{.CreatedAt}}' cs554-p3-local-redis-data
+/cs554-p3-local-api      id=f2d8c3bb45da started=2026-11-26T00:52:21.298908552Z
+/cs554-p3-local-redis    id=197347c8867c started=2026-11-26T00:50:44.471303924Z
+/cs554-p3-local-redis-data volume created=2026-11-26T00:50:42Z
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 2
+Smoke test: 2 request(s) to http://127.0.0.1:8082/
+  request 1: HTTP 200 service=cs554-p3-local-api hostname=f2d8c3bb45da localCount=1 redisCount=13 redisError=null
+  request 2: HTTP 200 service=cs554-p3-local-api hostname=f2d8c3bb45da localCount=2 redisCount=14 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ docker exec cs554-p3-local-redis redis-cli GET requests
+14

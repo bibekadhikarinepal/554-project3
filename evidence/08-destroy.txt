@@ -1,0 +1,64 @@
+# Part C: terraform destroy and verification
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+
+# Stack re-applied from the same terraform.tfvars, then destroyed (clean capture of the destroy output):
+
+$ terraform apply -no-color -auto-approve > /dev/null && scripts/smoke-test.sh "$(terraform output -raw api_url)" 2
+Smoke test: 2 request(s) to http://127.0.0.1:8082/
+  request 1: HTTP 200 service=cs554-p3-local-api hostname=c1b483796ea3 localCount=1 redisCount=1 redisError=null
+  request 2: HTTP 200 service=cs554-p3-local-api hostname=c1b483796ea3 localCount=2 redisCount=2 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ terraform workspace show && terraform state list
+default
+data.docker_image.api
+docker_network.backend
+docker_network.frontend
+module.api.docker_container.service
+module.redis.docker_container.redis
+module.redis.docker_image.redis
+module.redis.docker_volume.redis_data
+
+$ terraform destroy -no-color -auto-approve | grep -E "^  # |^Plan:|Destroying|Destruction complete|Destroy complete"
+  # docker_network.backend will be destroyed
+  # docker_network.frontend will be destroyed
+  # module.api.docker_container.service will be destroyed
+  # module.redis.docker_container.redis will be destroyed
+  # module.redis.docker_image.redis will be destroyed
+  # module.redis.docker_volume.redis_data will be destroyed
+Plan: 0 to add, 0 to change, 6 to destroy.
+module.api.docker_container.service: Destroying... [id=c1b483796ea3f7a9c98a40d5e78d08150b6675f21e72715c5dd27b4afa7b1ed1]
+module.api.docker_container.service: Destruction complete after 5s
+docker_network.frontend: Destroying... [id=4b282f3e438f2162cbad5189b22635efd7e1bc90e76496859518e9967eb82dfe]
+module.redis.docker_container.redis: Destroying... [id=82b134180165a1987f57d2b88e8a2c13c325e2826f1df14dbf5648f87f704f71]
+module.redis.docker_container.redis: Destruction complete after 0s
+module.redis.docker_image.redis: Destroying... [id=sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fberedis:7.4.12-alpine]
+module.redis.docker_volume.redis_data: Destroying... [id=cs554-p3-local-redis-data]
+module.redis.docker_image.redis: Destruction complete after 0s
+docker_network.backend: Destroying... [id=1c34b4a17dc798440923785f775ed0721defced50f0597e645696a46e6642707]
+module.redis.docker_volume.redis_data: Destruction complete after 2s
+docker_network.frontend: Destruction complete after 2s
+docker_network.backend: Destruction complete after 3s
+Destroy complete! Resources: 6 destroyed.
+
+# Verification:
+
+$ terraform state list | wc -l | xargs echo "addresses in state:"
+addresses in state: 0
+
+$ echo "containers: $(docker ps -a --filter label=project=cs554-p3 -q | wc -l | xargs)"; echo "networks:   $(docker network ls --filter label=project=cs554-p3 -q | wc -l | xargs)"; echo "volumes:    $(docker volume ls --filter label=project=cs554-p3 -q | wc -l | xargs)"
+containers: 0
+networks:   0
+volumes:    0
+
+$ docker volume inspect cs554-p3-local-redis-data >/dev/null 2>&1 && echo "volume still exists" || echo "volume cs554-p3-local-redis-data removed: the Redis counter is deleted with it (no orphaned data left behind)"
+volume cs554-p3-local-redis-data removed: the Redis counter is deleted with it (no orphaned data left behind)
+
+$ curl -s --max-time 3 "http://127.0.0.1:8082/" || echo "endpoint 8082: no longer served"
+endpoint 8082: no longer served
+
+# Images are kept on purpose: redis has keep_locally = true, and the API image is not owned by Terraform.
+
+$ docker image ls --format '{{.Repository}}:{{.Tag}}  {{.ID}}' | grep -E '^(redis:7.4.12-alpine|cs454-project3-api:1.0) '
+cs454-project3-api:1.0  a06a4e5ac65e
+redis:7.4.12-alpine  7f7d30b7fdd0

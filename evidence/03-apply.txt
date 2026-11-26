@@ -1,0 +1,26 @@
+# Part A: terraform apply of the saved plan
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+$ terraform apply initial.tfplan
+module.redis.docker_image.redis: Creating...
+module.redis.docker_volume.redis_data: Creating...
+docker_network.frontend: Creating...
+docker_network.backend: Creating...
+module.redis.docker_volume.redis_data: Creation complete after 0s [id=cs554-p3-local-redis-data]
+module.redis.docker_image.redis: Creation complete after 1s [id=sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fberedis:7.4.12-alpine]
+docker_network.backend: Creation complete after 2s [id=e02319419e8d5c76fe7e382be5c8eb61a59424be255de3e4cc14ba03f15abe98]
+docker_network.frontend: Creation complete after 2s [id=85431c6afdf61417a625996bffa7113681ba06e31b267ee97a4d9887e40de532]
+module.redis.docker_container.redis: Creating...
+module.redis.docker_container.redis: Creation complete after 4s [id=197347c8867c04546029cfee0e4d7bfe3472f1034f4b7335bbf2de317a1f8abc]
+module.api.docker_container.service: Creating...
+module.api.docker_container.service: Creation complete after 0s [id=f77c4817d1cc4a91dfae071b1b587df32f5dbf3601a532e68dcf6037f62d168c]
+[...]
+Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
+[...]
+Outputs:
+[...]
+api_url = "http://127.0.0.1:8081"
+[...]
+redis_internal_address = "cs554-p3-local-redis:6379"
+[...]

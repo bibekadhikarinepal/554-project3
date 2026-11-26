@@ -1,0 +1,78 @@
+# Part A: terraform plan (initial)
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+$ terraform plan -out=initial.tfplan
+[...]
+  # docker_network.backend will be created
+  + resource "docker_network" "backend" {
+[...]
+      + internal    = true
+[...]
+      + name        = "cs554-p3-local-backend"
+[...]
+  # docker_network.frontend will be created
+  + resource "docker_network" "frontend" {
+[...]
+      + name        = "cs554-p3-local-frontend"
+[...]
+  # module.api.docker_container.service will be created
+  + resource "docker_container" "service" {
+[...]
+          + "PORT=3000",
+          + "REDIS_HOST=cs554-p3-local-redis",
+          + "REDIS_PORT=6379",
+          + "SERVICE_NAME=cs554-p3-local-api",
+[...]
+      + image                                       = "sha256:a06a4e5ac65e1ccf8dbd53a18eaab8611f3d53329866b72c9e3deedb6205b7f4"
+[...]
+      + name                                        = "cs554-p3-local-api"
+[...]
+      + restart                                     = "unless-stopped"
+[...]
+      + wait                                        = false
+[...]
+          + name           = "cs554-p3-local-backend"
+[...]
+          + name           = "cs554-p3-local-frontend"
+[...]
+          + external = 8081
+          + internal = 3000
+          + ip       = "127.0.0.1"
+[...]
+  # module.redis.docker_container.redis will be created
+  + resource "docker_container" "redis" {
+[...]
+          + "redis-server",
+          + "--appendonly",
+[...]
+          + "--appendfsync",
+[...]
+      + name                                        = "cs554-p3-local-redis"
+[...]
+      + restart                                     = "unless-stopped"
+[...]
+      + wait                                        = true
+[...]
+          + name           = "cs554-p3-local-backend"
+[...]
+          + container_path  = "/data"
+          + volume_name     = "cs554-p3-local-redis-data"
+[...]
+  # module.redis.docker_image.redis will be created
+  + resource "docker_image" "redis" {
+[...]
+      + keep_locally = true
+      + name         = "redis:7.4.12-alpine"
+[...]
+  # module.redis.docker_volume.redis_data will be created
+  + resource "docker_volume" "redis_data" {
+[...]
+      + name       = "cs554-p3-local-redis-data"
+[...]
+Plan: 6 to add, 0 to change, 0 to destroy.
+[...]
+Changes to Outputs:
+[...]
+  + api_url                = "http://127.0.0.1:8081"
+[...]

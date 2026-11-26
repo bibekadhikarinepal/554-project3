@@ -1,0 +1,145 @@
+# CS 554: dev and test from the same code, separate workspaces and state
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+# The only differences between the two environments:
+
+$ diff environments/dev.tfvars environments/test.tfvars; true
+1,3c1,3
+< # dev: use with the "dev" workspace. Nonsecret.
+< environment       = "dev"
+< host_port         = 8091
+---
+> # test: use with the "test" workspace. Nonsecret.
+> environment       = "test"
+> host_port         = 8092
+
+# dev:
+
+$ terraform workspace select -or-create dev
+Created and switched to workspace "dev"!
+[...]
+
+$ terraform plan -no-color -var-file=environments/dev.tfvars -out=dev.tfplan | grep -E "^  # |^Plan:|api_url|environment|workspace"
+  # docker_network.backend will be created
+[...]
+  # docker_network.frontend will be created
+[...]
+  # module.api.docker_container.service will be created
+[...]
+  # module.redis.docker_container.redis will be created
+[...]
+  # module.redis.docker_image.redis will be created
+  # module.redis.docker_volume.redis_data will be created
+[...]
+Plan: 6 to add, 0 to change, 0 to destroy.
+  + api_url                = "http://127.0.0.1:8091"
+[...]
+
+$ terraform apply -no-color dev.tfplan | grep -E "Creation complete|Apply complete"; rm dev.tfplan
+module.redis.docker_volume.redis_data: Creation complete after 0s [id=cs554-p3-dev-redis-data]
+module.redis.docker_image.redis: Creation complete after 1s [id=sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fberedis:7.4.12-alpine]
+docker_network.backend: Creation complete after 2s [id=0d7c9f9c6efdee5b6037bc9845db5c5b10a8f9f429ad80595fa2424d10ccdff1]
+docker_network.frontend: Creation complete after 2s [id=da27c7a6b4ff6bcaf2bd109063ae40b2264f2fa5bd6a9bd82a1020ea8902b547]
+module.redis.docker_container.redis: Creation complete after 4s [id=1c962a4afd7f082f663f30aff37cfc8f024fa4276230e01b07c2f284a5092d5f]
+module.api.docker_container.service: Creation complete after 0s [id=a43d747c9dc7d8913b82a38c595556ac114cf9262df938dd55552a367bb46ae2]
+Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 3
+Smoke test: 3 request(s) to http://127.0.0.1:8091/
+  request 1: HTTP 200 service=cs554-p3-dev-api hostname=a43d747c9dc7 localCount=1 redisCount=1 redisError=null
+  request 2: HTTP 200 service=cs554-p3-dev-api hostname=a43d747c9dc7 localCount=2 redisCount=2 redisError=null
+  request 3: HTTP 200 service=cs554-p3-dev-api hostname=a43d747c9dc7 localCount=3 redisCount=3 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ docker ps --filter label=environment=dev --format 'table {{.Names}}\t{{.Ports}}\t{{.Labels}}' | cut -c1-140
+NAMES                PORTS                      LABELS
+cs554-p3-dev-api     127.0.0.1:8091->3000/tcp   environment=dev,managed-by=terraform,project=cs554-p3,tf-workspace=dev
+cs554-p3-dev-redis                              project=cs554-p3,tf-workspace=dev,environment=dev,managed-by=terraform
+
+# (The drift experiment ran on dev at this point: see 10-drift-experiment.txt.)
+
+# Guard: test settings are refused in the dev workspace, and dev is not touched:
+
+$ terraform workspace show
+dev
+
+$ terraform plan -no-color -var-file=environments/test.tfvars 2>&1 | sed -n "/Error:/,\$p"
+Error: Resource precondition failed
+
+  on main.tf line 50, in resource "docker_network" "backend":
+  50:       condition     = terraform.workspace == "default" || terraform.workspace == var.environment
+    ├────────────────
+    │ terraform.workspace is "dev"
+    │ var.environment is "test"
+
+Workspace "dev" does not match environment "test". Run: terraform workspace
+select test  (or use the matching -var-file).
+
+$ docker ps --filter label=project=cs554-p3 --format '{{.Names}}  {{.Ports}}   (dev untouched by the refused plan)'
+cs554-p3-dev-api  127.0.0.1:8091->3000/tcp   (dev untouched by the refused plan)
+cs554-p3-dev-redis     (dev untouched by the refused plan)
+
+# dev is destroyed before test is created (nonconcurrent):
+
+$ terraform destroy -no-color -auto-approve -var-file=environments/dev.tfvars | grep -E "Destroy complete"
+Destroy complete! Resources: 6 destroyed.
+
+# test:
+
+$ terraform workspace select -or-create test
+Created and switched to workspace "test"!
+[...]
+
+$ terraform plan -no-color -var-file=environments/test.tfvars -out=test.tfplan | grep -E "^  # |^Plan:|api_url"
+  # docker_network.backend will be created
+  # docker_network.frontend will be created
+  # module.api.docker_container.service will be created
+  # module.redis.docker_container.redis will be created
+  # module.redis.docker_image.redis will be created
+  # module.redis.docker_volume.redis_data will be created
+Plan: 6 to add, 0 to change, 0 to destroy.
+  + api_url                = "http://127.0.0.1:8092"
+
+$ terraform apply -no-color test.tfplan | grep -E "Apply complete"; rm test.tfplan
+Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 2
+Smoke test: 2 request(s) to http://127.0.0.1:8092/
+  request 1: HTTP 200 service=cs554-p3-test-api hostname=7a3b141ea849 localCount=1 redisCount=1 redisError=null
+  request 2: HTTP 200 service=cs554-p3-test-api hostname=7a3b141ea849 localCount=2 redisCount=2 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ docker ps --filter label=project=cs554-p3 --format 'table {{.Names}}\t{{.Ports}}\t{{.Status}}'
+NAMES                 PORTS                      STATUS
+cs554-p3-test-api     127.0.0.1:8092->3000/tcp   Up Less than a second
+cs554-p3-test-redis                              Up 4 seconds (healthy)
+
+# Each workspace has its own state file:
+
+$ terraform workspace list
+  default
+  dev
+* test
+
+$ find terraform.tfstate.d -name terraform.tfstate | sort
+terraform.tfstate.d/dev/terraform.tfstate
+terraform.tfstate.d/test/terraform.tfstate
+
+$ for ws in dev test; do printf "%-5s state holds %s address(es)\n" "$ws" "$(terraform state list -state=terraform.tfstate.d/$ws/terraform.tfstate | wc -l | xargs)"; done
+dev   state holds 0 address(es)
+test  state holds 7 address(es)
+
+# Cleanup:
+
+$ terraform destroy -no-color -auto-approve -var-file=environments/test.tfvars | grep -E "Destroy complete"
+Destroy complete! Resources: 6 destroyed.
+
+$ echo "containers: $(docker ps -a --filter label=project=cs554-p3 -q | wc -l | xargs)  networks: $(docker network ls --filter label=project=cs554-p3 -q | wc -l | xargs)  volumes: $(docker volume ls --filter label=project=cs554-p3 -q | wc -l | xargs)"
+containers: 0  networks: 0  volumes: 0
+
+$ terraform workspace select default && terraform workspace delete dev && terraform workspace delete test && terraform workspace list
+Switched to workspace "default".
+Deleted workspace "dev"!
+Deleted workspace "test"!
+* default

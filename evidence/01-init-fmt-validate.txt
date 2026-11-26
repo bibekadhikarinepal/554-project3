@@ -1,0 +1,26 @@
+# Part A: terraform init, fmt, validate
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+$ cp terraform.tfvars.example terraform.tfvars && grep -vE "^\s*(#|$)" terraform.tfvars
+host_port = 8081
+environment = "local"
+
+$ terraform init
+Initializing the backend...
+Initializing modules...
+- api in modules/web-service
+- redis in modules/redis
+Initializing provider plugins...
+- Reusing previous version of kreuzwerker/docker from the dependency lock file
+- Installing kreuzwerker/docker v4.6.0...
+- Installed kreuzwerker/docker v4.6.0 (self-signed, key ID 0DCE698927DAF8EC)
+[...]
+Terraform has been successfully initialized!
+[...]
+
+$ terraform fmt -recursive -check -diff && echo "fmt: all files already canonically formatted (exit 0)"
+fmt: all files already canonically formatted (exit 0)
+
+$ terraform validate
+Success! The configuration is valid.

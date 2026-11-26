@@ -1,0 +1,54 @@
+# Part A: HTTP test, API reaches Redis, only the API has a host port
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+
+$ curl -s "$(terraform output -raw api_url)/"
+{
+  "service": "cs554-p3-local-api",
+  "hostname": "f77c4817d1cc",
+  "pid": 1,
+  "localCount": 1,
+  "redisCount": 1,
+  "redisHost": "cs554-p3-local-redis",
+  "redisError": null,
+  "path": "/",
+  "timestamp": "2026-11-26T00:51:04.987Z"
+}
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 3
+Smoke test: 3 request(s) to http://127.0.0.1:8081/
+  request 1: HTTP 200 service=cs554-p3-local-api hostname=f77c4817d1cc localCount=2 redisCount=2 redisError=null
+  request 2: HTTP 200 service=cs554-p3-local-api hostname=f77c4817d1cc localCount=3 redisCount=3 redisError=null
+  request 3: HTTP 200 service=cs554-p3-local-api hostname=f77c4817d1cc localCount=4 redisCount=4 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ docker exec cs554-p3-local-redis redis-cli GET requests
+4
+
+$ docker ps --filter label=project=cs554-p3 --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+NAMES                  IMAGE          STATUS                    PORTS
+cs554-p3-local-api     a06a4e5ac65e   Up 17 seconds             127.0.0.1:8081->3000/tcp
+cs554-p3-local-redis   7f7d30b7fdd0   Up 21 seconds (healthy)   
+
+$ docker inspect cs554-p3-local-redis --format 'redis PortBindings={{json .HostConfig.PortBindings}}'; docker port cs554-p3-local-redis; echo "docker port redis -> (empty: nothing published)"
+redis PortBindings={}
+docker port redis -> (empty: nothing published)
+
+$ docker inspect cs554-p3-local-api --format 'api   PortBindings={{json .HostConfig.PortBindings}}'
+api   PortBindings={"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8081"}]}
+
+$ docker inspect cs554-p3-local-api --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(SERVICE_NAME|REDIS_HOST|REDIS_PORT|PORT)='
+REDIS_HOST=cs554-p3-local-redis
+REDIS_PORT=6379
+SERVICE_NAME=cs554-p3-local-api
+PORT=3000
+
+$ docker exec cs554-p3-local-api getent hosts cs554-p3-local-redis
+172.23.0.2        cs554-p3-local-redis  cs554-p3-local-redis
+
+$ for n in cs554-p3-local-frontend cs554-p3-local-backend; do docker network inspect $n --format '{{.Name}}: internal={{.Internal}} subnet={{range .IPAM.Config}}{{.Subnet}}{{end}} members={{range .Containers}}{{.Name}} {{end}}'; done
+cs554-p3-local-frontend: internal=false subnet=172.24.0.0/16 members=cs554-p3-local-api 
+cs554-p3-local-backend: internal=true subnet=172.23.0.0/16 members=cs554-p3-local-redis cs554-p3-local-api 
+
+$ docker exec cs554-p3-local-redis wget -q -T 3 -O /dev/null http://1.1.1.1/ && echo "egress OK" || echo "egress from Redis BLOCKED (expected)"
+wget: can't connect to remote host (1.1.1.1): Network unreachable
+egress from Redis BLOCKED (expected)

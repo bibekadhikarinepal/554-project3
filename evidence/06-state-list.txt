@@ -1,0 +1,19 @@
+# Part C: terraform state list
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+
+$ terraform state list
+data.docker_image.api
+docker_network.backend
+docker_network.frontend
+module.api.docker_container.service
+module.redis.docker_container.redis
+module.redis.docker_image.redis
+module.redis.docker_volume.redis_data
+
+# data.docker_image.api is only read. The other 6 addresses are the resources Terraform owns.
+
+# The state file stores input values in plain text, which is why it is git-ignored:
+
+$ ls -l terraform.tfstate | awk "{print \$1, \$5, \$NF}"; grep -o "REDIS_HOST=[a-z0-9-]*" terraform.tfstate | sort -u
+-rw-r--r--@ 21790 terraform.tfstate
+REDIS_HOST=cs554-p3-local-redis

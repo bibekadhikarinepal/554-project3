@@ -1,0 +1,67 @@
+# Part B: change host_port from 8081 to 8082
+# Captured 2026-11-26 (UTC) on macOS 14.6, Terraform 1.13.4, kreuzwerker/docker 4.6.0, Docker Engine 28.1.1.
+# Long output is shortened; [...] marks removed lines.
+
+# Before the change:
+
+$ terraform output
+[...]
+api_url = "http://127.0.0.1:8081"
+[...]
+
+$ docker ps --filter label=project=cs554-p3 --format 'table {{.Names}}\t{{.ID}}\t{{.Ports}}'
+NAMES                  CONTAINER ID   PORTS
+cs554-p3-local-api     f77c4817d1cc   127.0.0.1:8081->3000/tcp
+cs554-p3-local-redis   197347c8867c   
+
+# Change the variable, save the plan, and show it as text:
+
+$ sed -i '' 's/^host_port = 8081/host_port = 8082/' terraform.tfvars && diff terraform.tfvars.example terraform.tfvars; true
+11c11
+< host_port = 8081
+---
+> host_port = 8082
+
+$ terraform plan -out=change.tfplan > /dev/null && echo "binary plan saved to change.tfplan"
+binary plan saved to change.tfplan
+
+$ terraform show change.tfplan
+[...]
+-/+ destroy and then create replacement
+[...]
+  # module.api.docker_container.service must be replaced
+-/+ resource "docker_container" "service" {
+[...]
+        name                                        = "cs554-p3-local-api"
+[...]
+          ~ external = 8081 -> 8082 # forces replacement
+[...]
+Plan: 1 to add, 0 to change, 1 to destroy.
+[...]
+Changes to Outputs:
+  ~ api_url                = "http://127.0.0.1:8081" -> "http://127.0.0.1:8082"
+
+# Apply the saved plan and test the new endpoint:
+
+$ terraform apply change.tfplan
+module.api.docker_container.service: Destroying... [id=f77c4817d1cc4a91dfae071b1b587df32f5dbf3601a532e68dcf6037f62d168c]
+module.api.docker_container.service: Destruction complete after 5s
+module.api.docker_container.service: Creating...
+module.api.docker_container.service: Creation complete after 1s [id=1a93d5923e6a55328acc27d461f7906c96bb94c6d70ce95a5dc946bfe2a1f297]
+[...]
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+[...]
+
+$ scripts/smoke-test.sh "$(terraform output -raw api_url)" 2
+Smoke test: 2 request(s) to http://127.0.0.1:8082/
+  request 1: HTTP 200 service=cs554-p3-local-api hostname=1a93d5923e6a localCount=1 redisCount=5 redisError=null
+  request 2: HTTP 200 service=cs554-p3-local-api hostname=1a93d5923e6a localCount=2 redisCount=6 redisError=null
+PASS: API responded and the Redis-backed counter incremented on every request.
+
+$ curl -s --max-time 3 http://127.0.0.1:8081/ || echo "old endpoint 8081: no longer served (expected)"
+old endpoint 8081: no longer served (expected)
+
+$ docker ps --filter label=project=cs554-p3 --format 'table {{.Names}}\t{{.ID}}\t{{.Status}}\t{{.Ports}}'
+NAMES                  CONTAINER ID   STATUS                    PORTS
+cs554-p3-local-api     1a93d5923e6a   Up Less than a second     127.0.0.1:8082->3000/tcp
+cs554-p3-local-redis   197347c8867c   Up 44 seconds (healthy)   
